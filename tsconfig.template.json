@@ -1,0 +1,26 @@
+{
+  ".notes": [
+    "This file is used to generate the root tsconfig.json file external to all units - it enables cross-unit code dependencies without needing to `npm install` or update!",
+    "When generating the real root tsconfig.json need to modify the following properties: (1) delete `'.notes'`, (2) define `compilerOptions.baseUrl` as an absolute path, (3) populate `compilerOptions.paths`, and (4) populate `references`",
+    "TODO: Should probably store this file in a @gershy unit - then Units can reference it using `{ extends: '@gershy/clearing/tsconfig.json' }` instead of a '..' pointing outside the git repo - also reconsider the `baseUrl`!!"
+  ],
+  "compilerOptions": {
+    "baseUrl": "<units root>",
+    "lib": ["es2024"],
+    "target": "es2024",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "noImplicitAny": false,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "rewriteRelativeImportExtensions": true,
+    "forceConsistentCasingInFileNames": true,
+    "noUncheckedSideEffectImports": true,
+    "verbatimModuleSyntax": true,
+    "noUnusedLocals": true,
+    "paths": {}
+  },
+  "references": [],
+  "files": []
+}
