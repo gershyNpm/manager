@@ -867,7 +867,8 @@ entry({ name: 'manager', codec, inp: { act: 'help' }, fn: async (logger, inp) =>
     fact: gershyFact,
     gitOrg: { name: 'gershyNpm' }
   });
-  ecosystem.load().then(() => logger.log({ ecosystem }));
+  void ecosystem; // ZZZ - use it!!
+  // ecosystem.load().then(() => logger.log({ ecosystem }));
   
   const cmd = eval(`(${process.argv.at(-1)})`);
   const units = await Unit.getUnits();
