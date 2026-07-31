@@ -8,16 +8,17 @@ import tsc from 'typescript';
 import esbuild from 'esbuild';
 import { entry } from '@gershy/entry';
 import { convertImportsTsToJs, recurseTree } from './util.ts';
+import type { Fact } from '@gershy/disk';
 
 // TODO: TRANSFER REPOS TO "gershyNpm"...
-// - Transfer manually in UI
-// - Run `git remote set-url origin git@github.com:gershyNpm/{{repo}}.git`
-// - Update package.json with new git urls
+// [X] Transfer manually in UI
+// [X] Run `git remote set-url origin git@github.com:gershyNpm/{{repo}}.git`
+// [ ] Update package.json with new git urls
 
 // TODO: Accidental use of npm "dependencies" (i.e. "runtime" dependency):
 // - A dependency should only be "runtime" (appearing in package.json's "dependencies") if it's
 //   used for a non-type import in a bundled (non-.test.ts) file!
-// - Typescript settings for `import type ...` to be used
+// - Typescript settings to force use of `import type ...` where applicable
 // - Some other tool (something custom) can search all imports for all @gershy dependencies and
 //   determine for each if it's a dev or runtime dependency
 
@@ -84,8 +85,19 @@ entry({ name: 'manager', codec, inp: { act: 'help' }, fn: async (logger, inp) =>
   
   type DirName = string;
   type GitName = string;
-  type NpmName = `@gershy/${string}`;
+  type KebabCase = string;
+  type NpmName = `@${KebabCase}/${KebabCase}`;
+  type NpmPinnedVersion = `^${number}.${number}.${number}`;
+  type PackageJson = {
+    name: `@${string}/${string}`,
+    dependencies?: { [K in NpmName]: `^${number}.${number}.${number}` },
+    devDependencies?: { [K in NpmName]: `^${number}.${number}.${number}` },
+    peerDependencies?: { [K in NpmName]: `^${number}.${number}.${number}` }
+  };
   
+  const npmDepKeys = [ 'dependencies', 'devDependencies', 'peerDependencies' ] as const;
+  type NpmDepKey = (typeof npmDepKeys)[number];
+
   class Unit {
     
     protected static units = new Map<DirName, Unit>;
@@ -125,6 +137,7 @@ entry({ name: 'manager', codec, inp: { act: 'help' }, fn: async (logger, inp) =>
     protected requireDeps: { [K in 'main' | 'dev' | 'peer']: { [K in GitName]: { unit: Unit, version: string } } };
     
     // Deps which depend on ("are supported by") the Unit; their package.jsons reference the Unit
+    // Used to determine which downstream supported units require an update when this unit updates
     protected supportDeps: { [K in 'main' | 'dev' | 'peer']: { [K in GitName]: { unit: Unit, version: string } } };
     
     constructor(gitName: DirName) {
@@ -144,13 +157,11 @@ entry({ name: 'manager', codec, inp: { act: 'help' }, fn: async (logger, inp) =>
       
     }
     
+    public getRepoFact() { return gershyFact.kid([ this.gitName === 'manager' ? '.manager' : this.gitName ]); }
     public getGitName() { return this.gitName; }
     public getNpmName() { return Unit.gitToNpm(this.gitName); }
     public getNpmVersion() { return this.pkg.version; }
-    
-    public getRepoFact() {
-      return gershyFact.kid([ this.gitName === 'manager' ? '.manager' : this.gitName ]);
-    }
+    public getPackageJsonFact() { return this.getRepoFact().kid([ 'package.json' ]); }
     
     public async initReferences() {
       
@@ -159,7 +170,7 @@ entry({ name: 'manager', codec, inp: { act: 'help' }, fn: async (logger, inp) =>
         // Update our required deps (easier)
         const repoFact = this.getRepoFact();
         const pkg = this.pkg = (await repoFact.kid([ 'package.json' ]).getData('json') as typeof this.pkg);
-        
+
         this.requireDeps = { main: pkg.dependencies ?? {}, dev: pkg.devDependencies ?? {}, peer: pkg.peerDependencies ?? {} }
           [map]((v, k) => v[mapk]((version, npmName) => {
             if (!npmName[hasHead]('@gershy/')) return skip;
@@ -187,15 +198,6 @@ entry({ name: 'manager', codec, inp: { act: 'help' }, fn: async (logger, inp) =>
       return this.supportDeps[toArr](deps => deps[toArr](dep => dep.unit)).flat(1);
     }
     
-    public * getFullRequireDeps(seen = new Set<Unit>()) {
-      
-      if (seen.has(this)) return;
-      seen.add(this);
-      
-      yield this;
-      for (const unit of this.getRequireDeps()) yield* unit.getFullRequireDeps(seen);
-      
-    }
     public * getFullSupportDeps(seen = new Set<Unit>()) {
       
       if (seen.has(this)) return;
@@ -206,12 +208,10 @@ entry({ name: 'manager', codec, inp: { act: 'help' }, fn: async (logger, inp) =>
       
     }
     
-    public getDeps() { return this.supportDeps; }
-    
     public async firstTimeInitialization() {
       
       const res = await http({
-        netProc: { proto: 'https' as const, addr: 'api.github.com', port: 443, },
+        netProc: { proto: 'https' as const, addr: 'api.github.com', port: 443 },
         headers: {
           authorization: `token ${githubToken}`,
           accept: 'application/vnd.github+json',
@@ -566,7 +566,7 @@ entry({ name: 'manager', codec, inp: { act: 'help' }, fn: async (logger, inp) =>
       if (!this.initPrm && (await this.getNpmVersion() !== '0.0.0')) throw Error('initialization missing');
       
       // Isolate @gershy and non-@gershy dependencies
-      const deps = [ 'dependencies', 'devDependencies', 'peerDependencies' ][toObj](v => [ v, this.pkg[v] ?? {} ] as const);
+      const deps = ([ 'dependencies', 'devDependencies', 'peerDependencies' ] as const)[toObj](v => [ v, this.pkg[v] ?? {} ] as const);
       const srcDeps      = deps[map](deps => deps[map]((v, k) => k[hasHead]('@gershy/') ? v : skip));
       const srcDepsOther = deps[map](deps => deps[map]((v, k) => k[hasHead]('@gershy/') ? skip : v));
       
@@ -725,13 +725,187 @@ entry({ name: 'manager', codec, inp: { act: 'help' }, fn: async (logger, inp) =>
     }; }
     
   };
+
+  class Ecosystem {
+
+    protected npmGroupName: `@${string}`; // I.e. "@gershy"
+    protected fact: Fact;
+    protected gitOrg: { name: string };
+    protected units: { map: Map<GitName, { unit: Unit, requires: { [K in NpmDepKey]: Set<[ NpmPinnedVersion, Unit ]> }, supports: { [K in NpmDepKey]: Set<[ NpmPinnedVersion, Unit ]> } }>, linkedPrm: Promise<void> };
+    protected controller: Unit
+    constructor(args: { npmGroupName: `@${string}`, fact: Fact, gitOrg: { name: string } }) {
+      const controllerFact = rootFact.kid([ import.meta.dirname ]).par();
+      this.npmGroupName = args.npmGroupName;
+      this.fact = controllerFact.par();
+      this.gitOrg = args.gitOrg;
+      this.units = { map: new Map(), linkedPrm: Promise.resolve() };
+      this.controller = this.getUnit(controllerFact.getCmps().at(-1)!.replace(/^[.]/, ''));
+    }
+
+    protected npmToGit(npm: NpmName): GitName { return npm.slice((this.npmGroupName + '/').length).replace(/-([a-z])/g, (_, c) => c[upper]()); }
+    protected gitToNpm(git: GitName): NpmName { return `${this.npmGroupName}/${git.replace(/([^A-Z])([A-Z])/g, '$1-$2')[cl.lower]()}`; }
+
+    public async load() {
+
+      // Load every module which contains a package.json with the expected "name" property
+      const moduleKids = await this.fact.getKids().then(kids => Promise[allObj](kids[map](async kid => {
+
+        const pkg: null | PackageJson = await kid.kid([ 'package.json' ]).getData('json').catch(err => null) as any;
+        const npmFullName = pkg?.name ?? null;
+        if (!npmFullName?.[cl.hasHead](this.npmGroupName + '/')) return skip;
+
+        return this.getUnit(this.npmToGit(npmFullName), false);
+
+      })));
+      
+      await this.rebuildUnitLinks();
+
+      return moduleKids;
+
+    }
+
+    public getUnit(gitName: string, rebuild = true) {
+      if (!this.units.map.has(gitName)) {
+        this.units.map.set(gitName, {
+          unit: new Unit(gitName),
+          requires: npmDepKeys[toObj](v => [ v, new Set<any>() ]),
+          supports: npmDepKeys[toObj](v => [ v, new Set<any>() ])
+        });
+        if (rebuild) this.rebuildUnitLinks();
+      }
+      return this.units.map.get(gitName)!.unit;
+    }
+
+    public async updateUnitDeps(gitName: string, deps: { [K in NpmDepKey]: { [K in NpmName]: NpmPinnedVersion } }, rebuild = true) {
+
+      const mappedUnit = this.units.map.get(gitName);
+      if (!mappedUnit) throw Error('unit missing')[cl.mod]({ gitName });
+
+      const { unit } = mappedUnit;
+
+      const updatedPkgJson = {
+        ...(await unit.getPackageJsonFact().getData('json')) as PackageJson,
+        ...deps
+      };
+
+      if (rebuild) this.rebuildUnitLinks();
+
+      return updatedPkgJson;
+
+    }
+
+    protected async rebuildUnitLinks() {
+
+      // Completely refreshes all of `this.units` by rereading dependencies in every package.json;
+      // note this does not rediscover units - it will comprehensively process all units already
+      // present in `this.units`, and no others.
+
+      const map = new Map(this.units.map[cl.toArr]((v, k) => [ k, {
+        ...v,
+        requires: npmDepKeys[toObj](v => [ v, new Set<any>() ]),
+        supports: npmDepKeys[toObj](v => [ v, new Set<any>() ])
+      }] satisfies [string, any])) as (typeof this.units.map);
+
+      // Clobber existing `this.units.map` and `this.units.linkedPrm`, while kicking off the async
+      // process of building the new `this.units.map`, and representing completion with the new
+      // `this.units.linkedPrm`
+      return Object.assign(this.units, { map, linkedPrm: (async () => {
+
+        const isActive = () => this.units.map === map;
+
+        for (const { unit } of map.values()) {
+
+          if (!isActive()) break; // There's already another rebuild - stop bothering with this one!
+
+          const json: PackageJson = await unit.getPackageJsonFact().getData('json') as any;
+
+          for (const depKey of npmDepKeys) {
+            for (const [ npmName, npmPinnedVersion ] of (json[depKey] ?? {})[cl.walk]()) {
+
+              if (!isActive()) break;
+
+              // Note that `unit` has a dependency of type `depKey` on the unit identified by
+              // `npmName` - so `unit` "requires" unit-npm-named-`npmName`, and
+              // unit-npm-named-`npmName` "supports" `unit`
+
+              if (!npmName[cl.hasHead](this.npmGroupName + '/')) continue; // package.json dependencies include non-ecosystem modules - ignore them!
+
+              // Apply the two-way linking
+              const srcMappedUnit = map.get(unit.getGitName())!;
+              const trgMappedUnit = map.get(this.npmToGit(npmName))!;
+              srcMappedUnit.requires[depKey].add([ npmPinnedVersion, trgMappedUnit.unit ]);
+              trgMappedUnit.supports[depKey].add([ npmPinnedVersion, srcMappedUnit.unit ]);
+
+            }
+          }
+
+        }
+
+      })()}).linkedPrm;
+
+    }
+
+    [cl.limn]() {
+
+      return {
+        $form: this.constructor.name,
+        units: [ ...this.units.map.values() ].map(v => v.unit.getGitName()).sort((a, b) => {
+
+          if (a === this.controller.getGitName()) return -1;
+          if (b === this.controller.getGitName()) return +1;
+
+          return a.localeCompare(b);
+
+        })
+      };
+
+    }
+
+  };
+  const ecosystem = new Ecosystem({
+    npmGroupName: '@gershy',
+    fact: gershyFact,
+    gitOrg: { name: 'gershyNpm' }
+  });
+  ecosystem.load().then(() => logger.log({ ecosystem }));
   
   const cmd = eval(`(${process.argv.at(-1)})`);
   const units = await Unit.getUnits();
   
   const act = async (units: Unit[]) => {
     
-    if (cmd.act === 'script') {
+    if (cmd.act === 'init') {
+
+      type Repo = { id: string, name: string };
+      const res = await http<Repo[]>({
+        netProc: { proto: 'https' as const, addr: 'api.github.com', port: 443 },
+        headers: {
+          accept: 'application/vnd.github+json',
+          contentType: 'application/json'
+        },
+        path: [ 'orgs', githubOwner.name, 'repos' ],
+        method: 'get'
+      });
+
+      const repos = res.body.map(v => ({ id: v.id, name: v.name }));
+
+      // const errors: any[] = [];
+      for (const [ n, repo ] of repos.entries()) await logger.scope(`repo.${n}`, { repo: repo.name }, async logger => {
+
+        const unit = Unit.getUnit(repo.name);
+
+        const repoExists = await unit.getRepoFact().getKids().then(kids => !kids[cl.empty]());
+        if (repoExists) return void logger.log({ $$: 'preexisting' });
+
+        await proc(`git clone https://github.com/${githubOwner.name}/${unit.getGitName()}.git`, { cwd: gershyFact });
+        logger.log({ $$: 'cloned' });
+        
+        await proc('npm install', { cwd: unit.getRepoFact() });
+        logger.log({ $$: 'npmInstall' });
+
+      });
+
+    } else if (cmd.act === 'script') {
       
       await logger.scope('script', {}, async logger => {
         
@@ -786,11 +960,11 @@ entry({ name: 'manager', codec, inp: { act: 'help' }, fn: async (logger, inp) =>
         
         while (committed[count]() < supported[count]()) {
           
+          // TODO: comment exactly what this is??
           const committable = supported[toArr](v => v).filter(unit => {
             
             return true
               && !committed.has(unit)
-              // Every dep must either be already committed, or not part of the 
               && unit.getRequireDeps().every(dep => committed.has(dep) || !supported.has(dep));
             
           });
