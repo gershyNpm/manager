@@ -13,11 +13,11 @@ import codecParse from '@gershy/util-codec-parse';
 import type Logger from '@gershy/logger';
 
 // TODO: Accidental use of npm "dependencies" (i.e. "runtime" dependency):
-// - A dependency should only be "runtime" (appearing in package.json's "dependencies") if it's
-//   used for a non-type import in a bundled (non-.test.ts) file!
-// - Typescript settings to force use of `import type ...` where applicable
-// - Some other tool (something custom) can search all imports for all @gershy dependencies and
-//   determine for each if it's a dev or runtime dependency
+// [X] Typescript settings to force use of `import type ...` where applicable
+// [ ] Some other tool (something custom) can search all imports for all @gershy dependencies and
+//     determine for each if it's a dev or runtime dependency
+//      [ ] A dependency should only be "runtime" (appearing in package.json's "dependencies") if
+//          it's used for a non-type import in a bundled (non-.test.ts) file!
 
 const { skip, safe } = clearing;
 const at:       typeof clearing.at       = clearing.at;
