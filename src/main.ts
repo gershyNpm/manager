@@ -2,13 +2,14 @@ import '@gershy/clearing';
 import { rootFact } from '@gershy/disk';
 import http from '@gershy/util-http';
 import '@gershy/clearing';
-import procRaw from '@gershy/nodejs-proc';
+import procRaw, { type ProcOpts } from '@gershy/nodejs-proc';
 import tryWithHealing from '@gershy/util-try-with-healing';
 import tsc from 'typescript';
 import esbuild from 'esbuild';
 import { entry } from '@gershy/entry';
 import { convertImportsTsToJs, recurseTree } from './util.ts';
 import type { Fact } from '@gershy/disk';
+import codecParse from '@gershy/util-codec-parse';
 
 // TODO: TRANSFER REPOS TO "gershyNpm"...
 // [X] Transfer manually in UI
@@ -56,31 +57,196 @@ entry({ name: 'manager', codec, inp: { act: 'help' }, fn: async (logger, inp) =>
   const manageFact = rootFact.kid([ import.meta.dirname ]).par();
   const gershyFact = manageFact.par(); // References the "@gershy" directory
   
-  const { proc, githubOwner, githubToken, npmToken } = await (async () => {
-    
-    const config: { [K in 'git' | 'npm']: { token: string, expiry: string } } = await manageFact.kid([ 'config.json' ]).getData('json') as any;
-    
-    const proc: typeof procRaw = ((cmd, opts: { env?: Obj<string> } = {}) => {
-      return procRaw(cmd, {
-        cwd: rootFact,
-        ...opts,
-        env: { ...process.env, ...(opts.env ?? {}) }
-      });
-    }) as any;
-    
-    const githubOwner: { type: 'user' | 'org', name: string } = { type: 'org', name: 'gershyNpm' };
-    const githubToken = config.git.token; // TODO - obtain via `gh auth token`??
-    const githubTokenExpiry = config.git.expiry;
+  type Config = typeof config;
+  const config = await (async () => {
+
+    const configCodec = {
+      type: 'rec',
+      loose: true,
+      props: {
+        npm: { type: 'rec', props: {
+          user: { type: 'str' },
+          root: { type: 'rec', props: {
+            name: { type: 'str' }
+          }},
+          auth: { type: 'rec', props: {
+            token: { type: 'str' },
+            expiry: { type: 'str' }
+          }}
+        }},
+        git: { type: 'rec', props: {
+          user: { type: 'str' },
+          name: { type: 'str' },
+          email: { type: 'str' },
+          root: { type: 'oneOf', opts: [
+            { type: 'rec', props: {
+              type: { type: 'enum', opts: [ 'org' ] },
+              name: { type: 'str' },
+            }},
+            { type: 'rec', props: {
+              type: { type: 'enum', opts: [ 'user' ] }
+            }}
+          ]},
+          auth: { type: 'rec', props: {
+            token: { type: 'str' },
+            expiry: { type: 'str' }
+          }}
+        }},
+        aws: { type: 'rec', props: {
+          region: { type: 'str' },
+          auth: { type: 'rec', props: {
+            id:        { type: 'str' },
+            '!secret': { type: 'str' }
+          }}
+        }}
+      }
+    } as const;
+
+    const configJson = await manageFact.kid([ 'config.json' ]).getData('json');
+    const config = cl.safe(
+      () => codecParse(configCodec, configJson),
+      err => (err as Error)[cl.fire](msg => `config failed: ${msg}`)
+    );
+
+    const githubTokenExpiry = config.git.auth.expiry;
     const githubExpiryMs = +(new Date(githubTokenExpiry)) - +(new Date());
     if (githubExpiryMs < 1000 * 60 * 60 * 24 * 3) logger.log(`Github token expires in ${ (githubExpiryMs / (1000 * 60 * 60)).toFixed(2) } hours!`);
     
-    const npmToken = config.npm.token;
-    const npmTokenExpiry = config.npm.expiry;
+    const npmTokenExpiry = config.npm.auth.expiry;
     const npmExpiryMs = +(new Date(npmTokenExpiry)) - +(new Date());
     if (npmExpiryMs < 1000 * 60 * 60 * 24 * 3) logger.log(`Npm token expires in ${ (npmExpiryMs / (1000 * 60 * 60)).toFixed(2) } hours!`);
     
-    return { proc, githubOwner, githubToken, npmToken };
+    return config;
+
+  })();
+
+  const proc: typeof procRaw = ((cmd, opts: { env?: Obj<string> } = {}) => procRaw(cmd, {
+    cwd: rootFact,
+    ...opts,
+    env: { ...process.env, ...(opts.env ?? {}) }
+  })) as any;
+  
+  const authTools = (() => {
     
+      class SetupTool {
+        constructor() {}
+        public async setupVerify(): Promise<void> {
+          throw Error('script missing');
+        }
+      };
+      class GitTool extends SetupTool {
+        protected cfg: Config['git'];
+        protected proc: typeof proc;
+        constructor(inp: { cfg: Config['git'] }) {
+          super();
+          this.cfg = inp.cfg;
+          this.proc = (cmd: string, opts?: ProcOpts) => proc(cmd, {}[merge](opts ?? {})[merge]({ env: {
+            GIT_AUTHOR_NAME: this.cfg.name,
+            GIT_AUTHOR_EMAIL: this.cfg.email,
+            GIT_COMMITTER_NAME: this.cfg.name,
+            GIT_COMMITTER_EMAIL: this.cfg.email
+          }}));
+        }
+        public getRootName() {
+          // Returns the umbrella term - the org name if an org, otherwise username
+          return this.cfg.root.type === 'org' ? this.cfg.root.name : this.cfg.user;
+        }
+        public async setupVerify() {
+          // TODO
+        }
+        public async setRepo(inp: { name: string }) {
+          return http({
+            netProc: { proto: 'https' as const, addr: 'api.github.com', port: 443 },
+            headers: {
+              authorization: `token ${this.cfg.auth.token}`,
+              accept: 'application/vnd.github+json',
+              contentType: 'application/json'
+            },
+            path: this.cfg.root.type === 'org'
+              ? [ 'orgs', this.cfg.root.name, 'repos' ]
+              : [ 'user', 'repos' ],
+            method: 'post',
+            body: this.cfg.root.type === 'org'
+              ? { private: false, name: inp.name, owner: this.cfg.root.name }
+              : { private: false, name: inp.name }
+          });
+        }
+        public async listRepos() {
+          
+          if (this.cfg.root.type !== 'org') throw Error('logic missing'); // TODO!! I think a bearer token is needed, path changes, etc.
+          
+          type Repo = { id: string, name: string };
+          const res = await http<Repo[]>({
+            netProc: { proto: 'https' as const, addr: 'api.github.com', port: 443 },
+            headers: {
+              accept: 'application/vnd.github+json',
+              contentType: 'application/json'
+            },
+            path: [ 'orgs', this.getRootName(), 'repos' ],
+            method: 'get'
+          });
+
+          return res.body.map(v => ({ id: v.id, name: v.name })); 
+          
+        }
+        public async clone(inp: { name: string }) {
+          return this.proc(`git clone https://github.com/${this.getRootName()}/${inp.name}.git`, {
+            cwd: gershyFact
+          });
+        }
+        public async status(inp: { fact: Fact }) {
+          return this.proc('git status', { cwd: inp.fact })
+        }
+        public async send(inp: { fact: Fact, commitMsg: string }) {
+          await this.proc('git add --all',                    { cwd: inp.fact });
+          await this.proc(`git commit -m "${inp.commitMsg}"`, { cwd: inp.fact });
+          await this.proc('git push',                         { cwd: inp.fact });
+        }
+        
+      };
+      class NpmTool extends SetupTool {
+        protected cfg: Config['npm'];
+        constructor(inp: { cfg: Config['npm'] }) {
+          super();
+          this.cfg = inp.cfg;
+        }
+        public async setupVerify() {
+          // TODO
+        }
+        public async publish(args: { fact: Fact }) {
+          const npmrcFact = args.fact.kid([ '.npmrc' ]);
+          try {
+            await npmrcFact.setData(String[baseline](`
+              | registry=https://registry.npmjs.org/
+              | @${this.cfg.root.name}:registry=https://registry.npmjs.org/
+              | //registry.npmjs.org/:_authToken=${this.cfg.auth.token}
+              | always-auth=true
+            `));
+            await proc(`npm publish --registry=https://registry.npmjs.org/ --userconfig ${npmrcFact.fsp()} --access public`, { cwd: args.fact });
+          } finally { await npmrcFact.rem(); }
+        }
+        public async install(inp: { fact: Fact }) {
+          await proc('npm install', { cwd: inp.fact });
+        }
+        public async test(inp: { fact: Fact }) {
+          await proc('npm run test', { cwd: inp.fact });
+        }
+      };
+    
+      return {
+    
+        git: new GitTool({ cfg: config.git }),
+        npm: new NpmTool({ cfg: config.npm })
+    
+        // TODO: Add in all other "authTools" (maybe rename to "externalTools"?)
+        // - gh? (I think this can be combined into `GitTool`)
+        // - aws?
+        // - docker?
+        // - terraform?
+        // - localstack?
+    
+      };
+      
   })();
   
   type DirName = string;
@@ -114,7 +280,7 @@ entry({ name: 'manager', codec, inp: { act: 'help' }, fn: async (logger, inp) =>
       
       // Filter out anything that doesn't have a "package.json" kid
       const allKids = await gershyFact.getKids();
-      const kids = await Promise[allObj](allKids[map](async kid => (await kid.kid([ 'package.json' ]).exists()) ? kid : skip));
+      const kids = await Promise[allObj](allKids[map](async kid => await kid.kid([ 'package.json' ]).getType() ? kid : skip));
       
       const units = kids
         [toArr]((kid, fp) => Unit.getUnit(fp))
@@ -210,25 +376,11 @@ entry({ name: 'manager', codec, inp: { act: 'help' }, fn: async (logger, inp) =>
     
     public async firstTimeInitialization() {
       
-      const res = await http({
-        netProc: { proto: 'https' as const, addr: 'api.github.com', port: 443 },
-        headers: {
-          authorization: `token ${githubToken}`,
-          accept: 'application/vnd.github+json',
-          contentType: 'application/json'
-        },
-        path: githubOwner.type === 'org'
-          ? [ 'orgs', githubOwner.name, 'repos' ]
-          : [ 'user', 'repos' ],
-        method: 'post',
-        body: githubOwner.type === 'org'
-          ? { private: false, name: this.getGitName(), owner: githubOwner.name }
-          : { private: false, name: this.getGitName() }
-      });
+      const res = await authTools.git.setRepo({ name: this.getGitName() });
       if (res.code !== 201) throw Error('github repo creation failed')[mod]({ res: res[slice]([ 'code', 'body' ]) });
       logger.log('Repo created');
       
-      await proc(`git clone https://github.com/${githubOwner.name}/${this.getGitName()}.git`, { cwd: gershyFact });
+      await authTools.git.clone({ name: this.getGitName() });
       logger.log('Repo cloned');
       
       await this.updateFromTemplate();
@@ -245,7 +397,7 @@ entry({ name: 'manager', codec, inp: { act: 'help' }, fn: async (logger, inp) =>
       const copy = async (mode: 'force' | 'ensure', cmps: string[]) => {
         const src = templateFact.kid(cmps);
         const trg = repoFact    .kid(cmps);
-        if (mode === 'ensure' && await trg.exists()) return;
+        if (mode === 'ensure' && await trg.getType()) return;
         await trg.setData(await src.getData('bin'));
       };
       
@@ -283,12 +435,12 @@ entry({ name: 'manager', codec, inp: { act: 'help' }, fn: async (logger, inp) =>
           keywords: [ 'TODO' ],
           repository: {
             type: 'git',
-            url: `git+https://github.com/${githubOwner.name}/${this.getGitName()}.git`
+            url: `git+https://github.com/${authTools.git.getRootName()}/${this.getGitName()}.git`
           },
           bugs: {
-            url: `https://github.com/${githubOwner.name}/${this.getGitName()}/issues`
+            url: `https://github.com/${authTools.git.getRootName()}/${this.getGitName()}/issues`
           },
-          homepage: `https://github.com/${githubOwner.name}/${this.getGitName()}#readme`,
+          homepage: `https://github.com/${authTools.git.getRootName()}/${this.getGitName()}#readme`,
           type: 'module',  // Consider source files to be esm (compiled cjs/esm dirs have their own package.json with "type" defined)
           files: [ 'cmp' ] // Npm publish will use this as its root (package.json, readme, license etc are all included by default)
           
@@ -349,7 +501,7 @@ entry({ name: 'manager', codec, inp: { act: 'help' }, fn: async (logger, inp) =>
       );
       await this.updatePkgRequiredDeps();
       
-      await proc('npm install', { cwd: repoFact });
+      await authTools.npm.install({ fact: repoFact });
       
     }
     public async npmCompile() {
@@ -592,7 +744,7 @@ entry({ name: 'manager', codec, inp: { act: 'help' }, fn: async (logger, inp) =>
       const repoFact = this.getRepoFact();
       await tryWithHealing({
         
-        fn: () => proc('npm install', { cwd: repoFact }),
+        fn: () => authTools.npm.install({ fact: repoFact }),
         canHeal: err => /* logger.log({ err }) ?? */ true,
         
         // If `npm install` fails attempt recovery by deleting stale npm install and retrying...
@@ -620,7 +772,7 @@ entry({ name: 'manager', codec, inp: { act: 'help' }, fn: async (logger, inp) =>
         // Check git status; possibly short-circuit
         const { clean } = await (async () => {
           
-          const gitStatus = await proc('git status', { cwd: repoFact });
+          const gitStatus = await authTools.git.status({ fact: repoFact });
           const clean = gitStatus.output[has]('working tree clean');
           logger.log({ $$: 'gitStatus', clean });
           return { clean };
@@ -634,7 +786,7 @@ entry({ name: 'manager', codec, inp: { act: 'help' }, fn: async (logger, inp) =>
           // TODO: If this unit is a util, apply additional tests - no non-type imports allowed in main.ts!!
           // (Need to refactor clearing to export its utils globally D:)
           
-          await proc('npm run test', { cwd: repoFact }).catch(err => {
+          await authTools.npm.test({ fact: repoFact }).catch(err => {
             throw Error(`Commit "${git}" - tests failed`)[mod]({ npm, git, output: err.output ?? '<no output>' });
           });
           logger.log({ $$: 'test' });
@@ -647,7 +799,7 @@ entry({ name: 'manager', codec, inp: { act: 'help' }, fn: async (logger, inp) =>
           const [ major, minor, patch ] = this.pkg.version.split('.').map(v => parseInt(v, 10));
           
           await this.updatePackageJson({ version: `${major}.${minor}.${patch + 1}` })
-          await proc('npm install', { cwd: repoFact }); // Bring package-lock.json up-to-date too
+          await authTools.npm.install({ fact: repoFact }); // Bring package-lock.json up-to-date too
           logger.log({ $$: 'npmVersionIncrement', version: this.pkg.version  });
           
           return this.pkg.version as string;
@@ -665,9 +817,7 @@ entry({ name: 'manager', codec, inp: { act: 'help' }, fn: async (logger, inp) =>
         // Commit to git
         await (async () => {
           
-          await proc('git add --all',                { cwd: repoFact });
-          await proc(`git commit -m "${commitMsg}"`, { cwd: repoFact });
-          await proc('git push',                     { cwd: repoFact });
+          await authTools.git.send({ fact: repoFact, commitMsg });
           logger.log({ $$: 'gitPush', commitMsg });
           
         })();
@@ -675,18 +825,8 @@ entry({ name: 'manager', codec, inp: { act: 'help' }, fn: async (logger, inp) =>
         // Commit to npm
         await (async () => {
           
-          const npmrcFact = repoFact.kid([ '.npmrc' ]);
-          try {
-            await npmrcFact.setData(String[baseline](`
-              | registry=https://registry.npmjs.org/
-              | @gershy:registry=https://registry.npmjs.org/
-              | //registry.npmjs.org/:_authToken=${npmToken}
-              | always-auth=true
-            `));
-            await proc(`npm publish --registry=https://registry.npmjs.org/ --userconfig ${npmrcFact.fsp()} --access public`, { cwd: repoFact });
-          } finally { await npmrcFact.rem(); }
+          await authTools.npm.publish({ fact: repoFact });
           
-          // await proc('npm publish --access public', { cwd: repoFact, env: { NODE_AUTH_TOKEN: npmToken } });
           logger.log({ $$: 'npmPublish' });
           
           let cnt = 0;
@@ -877,31 +1017,22 @@ entry({ name: 'manager', codec, inp: { act: 'help' }, fn: async (logger, inp) =>
     
     if (cmd.act === 'init') {
 
-      type Repo = { id: string, name: string };
-      const res = await http<Repo[]>({
-        netProc: { proto: 'https' as const, addr: 'api.github.com', port: 443 },
-        headers: {
-          accept: 'application/vnd.github+json',
-          contentType: 'application/json'
-        },
-        path: [ 'orgs', githubOwner.name, 'repos' ],
-        method: 'get'
-      });
+      for (const [ , v ] of authTools[cl.walk]()) await v.setupVerify();
 
-      const repos = res.body.map(v => ({ id: v.id, name: v.name }));
+      const repos = await authTools.git.listRepos();
 
       // const errors: any[] = [];
       for (const [ n, repo ] of repos.entries()) await logger.scope(`repo.${n}`, { repo: repo.name }, async logger => {
 
         const unit = Unit.getUnit(repo.name);
 
-        const repoExists = await unit.getRepoFact().getKids().then(kids => !kids[cl.empty]());
+        const repoExists = await unit.getRepoFact().getType() === 'node';
         if (repoExists) return void logger.log({ $$: 'preexisting' });
-
-        await proc(`git clone https://github.com/${githubOwner.name}/${unit.getGitName()}.git`, { cwd: gershyFact });
+        
+        await authTools.git.clone({ name: unit.getGitName() });
         logger.log({ $$: 'cloned' });
         
-        await proc('npm install', { cwd: unit.getRepoFact() });
+        await authTools.npm.install({ fact: unit.getRepoFact() });
         logger.log({ $$: 'npmInstall' });
 
       });
@@ -1009,7 +1140,7 @@ entry({ name: 'manager', codec, inp: { act: 'help' }, fn: async (logger, inp) =>
       
       const gitPending = await Promise[allArr](units[map](async unit => {
         
-        const gitStatus = await proc(`git status`, { cwd: unit.getRepoFact() });
+        const gitStatus = await authTools.git.status({ fact: unit.getRepoFact() });
         return gitStatus.output[has]('working tree clean') ? skip : unit;
         
       }));
