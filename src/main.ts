@@ -52,7 +52,8 @@ const codec = {
   type: 'rec',
   loose: true,
   props: {
-    act: { type: 'str' }
+    act: { type: 'str' },
+    prod: { req: false, type: 'bln' }
   }
 } as const;
 entry({ name: 'manager', codec, inp: { act: 'help' }, fn: async (logger, inp) => {
@@ -243,6 +244,7 @@ entry({ name: 'manager', codec, inp: { act: 'help' }, fn: async (logger, inp) =>
     
         // TODO: Add in all other "authTools" (maybe rename to "externalTools"?)
         // - gh? (I think this can be combined into `GitTool`)
+        // - typescript? (Make sure it's the right version. But this file probably won't even transpile if it isn't?)
         // - aws?
         // - docker?
         // - terraform?
@@ -868,9 +870,9 @@ entry({ name: 'manager', codec, inp: { act: 'help' }, fn: async (logger, inp) =>
     }; }
     
   };
-
+  
   class Ecosystem {
-
+    
     protected npmGroupName: `@${string}`; // I.e. "@gershy"
     protected fact: Fact;
     protected gitOrg: { name: string };
@@ -884,29 +886,29 @@ entry({ name: 'manager', codec, inp: { act: 'help' }, fn: async (logger, inp) =>
       this.units = { map: new Map(), linkedPrm: Promise.resolve() };
       this.controller = this.getUnit(controllerFact.getCmps().at(-1)!.replace(/^[.]/, ''));
     }
-
+    
     protected npmToGit(npm: NpmName): GitName { return npm.slice((this.npmGroupName + '/').length).replace(/-([a-z])/g, (_, c) => c[upper]()); }
     protected gitToNpm(git: GitName): NpmName { return `${this.npmGroupName}/${git.replace(/([^A-Z])([A-Z])/g, '$1-$2')[lower]()}`; }
-
+    
     public async load() {
-
+      
       // Load every module which contains a package.json with the expected "name" property
       const moduleKids = await this.fact.getKids().then(kids => Promise[allObj](kids[map](async kid => {
-
+        
         const pkg: null | PackageJson = await kid.kid([ 'package.json' ]).getData('json').catch(err => null) as any;
         const npmFullName = pkg?.name ?? null;
         if (!npmFullName?.[hasHead](this.npmGroupName + '/')) return skip;
-
+        
         return this.getUnit(this.npmToGit(npmFullName), false);
-
+        
       })));
       
       await this.rebuildUnitLinks();
-
+      
       return moduleKids;
-
+      
     }
-
+    
     public getUnit(gitName: string, rebuild = true) {
       if (!this.units.map.has(gitName)) {
         this.units.map.set(gitName, {
@@ -918,76 +920,74 @@ entry({ name: 'manager', codec, inp: { act: 'help' }, fn: async (logger, inp) =>
       }
       return this.units.map.get(gitName)!.unit;
     }
-
+    
     public async updateUnitDeps(gitName: string, deps: { [K in NpmDepKey]: { [K in NpmName]: NpmPinnedVersion } }, rebuild = true) {
-
+      
       const mappedUnit = this.units.map.get(gitName);
       if (!mappedUnit) throw Error('unit missing')[mod]({ gitName });
-
+      
       const { unit } = mappedUnit;
-
+      
       const updatedPkgJson = {
         ...(await unit.getPackageJsonFact().getData('json')) as PackageJson,
         ...deps
       };
-
+      
       if (rebuild) this.rebuildUnitLinks();
-
+      
       return updatedPkgJson;
-
+      
     }
-
+    
     protected async rebuildUnitLinks() {
-
+      
       // Completely refreshes all of `this.units` by rereading dependencies in every package.json;
       // note this does not rediscover units - it will comprehensively process all units already
       // present in `this.units`, and no others.
-
+      
       const map = new Map(this.units.map[toArr]((v, k) => [ k, {
         ...v,
         requires: npmDepKeys[toObj](v => [ v, new Set<any>() ]),
         supports: npmDepKeys[toObj](v => [ v, new Set<any>() ])
       }] satisfies [string, any])) as (typeof this.units.map);
-
+      
       // Clobber existing `this.units.map` and `this.units.linkedPrm`, while kicking off the async
       // process of building the new `this.units.map`, and representing completion with the new
       // `this.units.linkedPrm`
       return Object.assign(this.units, { map, linkedPrm: (async () => {
-
+        
         const isActive = () => this.units.map === map;
-
+        
         for (const { unit } of map.values()) {
-
+          
           if (!isActive()) break; // There's already another rebuild - stop bothering with this one!
-
+          
           const json: PackageJson = await unit.getPackageJsonFact().getData('json') as any;
-
-          for (const depKey of npmDepKeys) {
-            for (const [ npmName, npmPinnedVersion ] of (json[depKey] ?? {})[walk]()) {
-
-              if (!isActive()) break;
-
-              // Note that `unit` has a dependency of type `depKey` on the unit identified by
-              // `npmName` - so `unit` "requires" unit-npm-named-`npmName`, and
-              // unit-npm-named-`npmName` "supports" `unit`
-
-              if (!npmName[hasHead](this.npmGroupName + '/')) continue; // package.json dependencies include non-ecosystem modules - ignore them!
-
-              // Apply the two-way linking
-              const srcMappedUnit = map.get(unit.getGitName())!;
-              const trgMappedUnit = map.get(this.npmToGit(npmName))!;
-              srcMappedUnit.requires[depKey].add([ npmPinnedVersion, trgMappedUnit.unit ]);
-              trgMappedUnit.supports[depKey].add([ npmPinnedVersion, srcMappedUnit.unit ]);
-
-            }
+          
+          for (const depKey of npmDepKeys) for (const [ npmName, npmPinnedVersion ] of (json[depKey] ?? {})[walk]()) {
+            
+            if (!isActive()) break;
+            
+            // Note that `unit` has a dependency of type `depKey` on the unit identified by
+            // `npmName` - so `unit` "requires" unit-npm-named-`npmName`, and
+            // unit-npm-named-`npmName` "supports" `unit`
+            
+            if (!npmName[hasHead](this.npmGroupName + '/')) continue; // package.json dependencies include non-ecosystem modules - ignore them!
+            
+            // Apply the two-way linking
+            const srcMappedUnit = map.get(unit.getGitName())!;
+            const trgMappedUnit = map.get(this.npmToGit(npmName))!;
+            srcMappedUnit.requires[depKey].add([ npmPinnedVersion, trgMappedUnit.unit ]);
+            trgMappedUnit.supports[depKey].add([ npmPinnedVersion, srcMappedUnit.unit ]);
+            
           }
-
+          
         }
-
+        
       })()}).linkedPrm;
-
+      
     }
-
+    
     [limn]() {
 
       return {
@@ -1003,7 +1003,7 @@ entry({ name: 'manager', codec, inp: { act: 'help' }, fn: async (logger, inp) =>
       };
 
     }
-
+    
   };
   const ecosystem = new Ecosystem({
     npmGroupName: '@gershy',
@@ -1186,12 +1186,13 @@ entry({ name: 'manager', codec, inp: { act: 'help' }, fn: async (logger, inp) =>
     
   };
   
-  await setRootTsconfig('prod');
-  try     {
+  const prod = inp.prod ?? true;
+  if (prod) await setRootTsconfig('prod');
+  try {
     const act = acts[at](inp.act, () => Error('unknown act')[fire]({ act: inp.act }));
     await act(logger, units, inp);
   } finally {
-    await setRootTsconfig('dev').catch(err => logger.log({ $$: 'rootTsconfigDevResetFailed', err }));
+    if (prod) await setRootTsconfig('dev').catch(err => logger.log({ $$: 'rootTsconfigDevResetFailed', err }));
   }
   
 }});
