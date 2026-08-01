@@ -12,11 +12,6 @@ import type { Fact } from '@gershy/disk';
 import codecParse from '@gershy/util-codec-parse';
 import type Logger from '@gershy/logger';
 
-// TODO: TRANSFER REPOS TO "gershyNpm"...
-// [X] Transfer manually in UI
-// [X] Run `git remote set-url origin git@github.com:gershyNpm/{{repo}}.git`
-// [ ] Update package.json with new git urls
-
 // TODO: Accidental use of npm "dependencies" (i.e. "runtime" dependency):
 // - A dependency should only be "runtime" (appearing in package.json's "dependencies") if it's
 //   used for a non-type import in a bundled (non-.test.ts) file!
@@ -28,7 +23,6 @@ const { skip, safe } = clearing;
 const at:       typeof clearing.at       = clearing.at;
 const map:      typeof clearing.map      = clearing.map;
 const mapk:     typeof clearing.mapk     = clearing.mapk;
-const has:      typeof clearing.has      = clearing.has;
 const allArr:   typeof clearing.allArr   = clearing.allArr;
 const merge:    typeof clearing.merge    = clearing.merge;
 const toArr:    typeof clearing.toArr    = clearing.toArr;
@@ -56,7 +50,7 @@ const codec = {
     prod: { req: false, type: 'bln' }
   }
 } as const;
-entry({ name: 'manager', codec, inp: { act: 'help' }, fn: async (logger, inp) => {
+entry({ name: 'manager', log: { format: { maxLineLen: 100 } }, codec, inp: { act: 'help' }, fn: async (logger, inp) => {
   
   const manageFact = rootFact.kid([ import.meta.dirname ]).par();
   const gershyFact = manageFact.par(); // References the "@gershy" directory
@@ -132,126 +126,174 @@ entry({ name: 'manager', codec, inp: { act: 'help' }, fn: async (logger, inp) =>
   
   const authTools = (() => {
     
-      class SetupTool {
-        constructor() {}
-        public async setupVerify(): Promise<void> {
-          throw Error('script missing');
-        }
-      };
-      class GitTool extends SetupTool {
-        protected cfg: Config['git'];
-        protected proc: typeof proc;
-        constructor(inp: { cfg: Config['git'] }) {
-          super();
-          this.cfg = inp.cfg;
-          this.proc = (cmd: string, opts?: ProcOpts) => proc(cmd, {}[merge](opts ?? {})[merge]({ env: {
-            GIT_AUTHOR_NAME: this.cfg.name,
-            GIT_AUTHOR_EMAIL: this.cfg.email,
-            GIT_COMMITTER_NAME: this.cfg.name,
-            GIT_COMMITTER_EMAIL: this.cfg.email
-          }}));
-        }
-        public getRootName() {
-          // Returns the umbrella term - the org name if an org, otherwise username
-          return this.cfg.root.type === 'org' ? this.cfg.root.name : this.cfg.user;
-        }
-        public async setupVerify() {
-          // TODO
-        }
-        public async setRepo(inp: { name: string }) {
-          return http({
-            netProc: { proto: 'https' as const, addr: 'api.github.com', port: 443 },
-            headers: {
-              authorization: `token ${this.cfg.auth.token}`,
-              accept: 'application/vnd.github+json',
-              contentType: 'application/json'
-            },
-            path: this.cfg.root.type === 'org'
-              ? [ 'orgs', this.cfg.root.name, 'repos' ]
-              : [ 'user', 'repos' ],
-            method: 'post',
-            body: this.cfg.root.type === 'org'
-              ? { private: false, name: inp.name, owner: this.cfg.root.name }
-              : { private: false, name: inp.name }
-          });
-        }
-        public async listRepos() {
-          
-          if (this.cfg.root.type !== 'org') throw Error('logic missing'); // TODO!! I think a bearer token is needed, path changes, etc.
-          
-          type Repo = { id: string, name: string };
-          const res = await http<Repo[]>({
-            netProc: { proto: 'https' as const, addr: 'api.github.com', port: 443 },
-            headers: {
-              accept: 'application/vnd.github+json',
-              contentType: 'application/json'
-            },
-            path: [ 'orgs', this.getRootName(), 'repos' ],
-            method: 'get'
-          });
-
-          return res.body.map(v => ({ id: v.id, name: v.name })); 
-          
-        }
-        public async clone(inp: { name: string }) {
-          return this.proc(`git clone https://github.com/${this.getRootName()}/${inp.name}.git`, {
-            cwd: gershyFact
-          });
-        }
-        public async status(inp: { fact: Fact }) {
-          return this.proc('git status', { cwd: inp.fact })
-        }
-        public async send(inp: { fact: Fact, commitMsg: string }) {
-          await this.proc('git add --all',                    { cwd: inp.fact });
-          await this.proc(`git commit -m "${inp.commitMsg}"`, { cwd: inp.fact });
-          await this.proc('git push',                         { cwd: inp.fact });
-        }
+    class SetupTool {
+      constructor() {}
+      public async setupVerify(): Promise<void> {
+        throw Error('script missing');
+      }
+    };
+    class GitTool extends SetupTool {
+      protected cfg: Config['git'];
+      protected proc: typeof proc;
+      constructor(inp: { cfg: Config['git'] }) {
+        super();
+        this.cfg = inp.cfg;
+        this.proc = (cmd: string, opts?: ProcOpts) => proc(cmd, {}[merge](opts ?? {})[merge]({ env: {
+          GIT_AUTHOR_NAME: this.cfg.name,
+          GIT_AUTHOR_EMAIL: this.cfg.email,
+          GIT_COMMITTER_NAME: this.cfg.name,
+          GIT_COMMITTER_EMAIL: this.cfg.email
+        }}));
+      }
+      public getRootName() {
+        // Returns the umbrella term - the org name if an org, otherwise username
+        return this.cfg.root.type === 'org' ? this.cfg.root.name : this.cfg.user;
+      }
+      public async setupVerify() {
+        // TODO
+      }
+      public async setRepo(inp: { name: string }) {
+        return http({
+          netProc: { proto: 'https' as const, addr: 'api.github.com', port: 443 },
+          headers: {
+            authorization: `token ${this.cfg.auth.token}`,
+            accept: 'application/vnd.github+json',
+            contentType: 'application/json'
+          },
+          path: this.cfg.root.type === 'org'
+            ? [ 'orgs', this.cfg.root.name, 'repos' ]
+            : [ 'user', 'repos' ],
+          method: 'post',
+          body: this.cfg.root.type === 'org'
+            ? { private: false, name: inp.name, owner: this.cfg.root.name }
+            : { private: false, name: inp.name }
+        });
+      }
+      public async listRepos() {
         
-      };
-      class NpmTool extends SetupTool {
-        protected cfg: Config['npm'];
-        constructor(inp: { cfg: Config['npm'] }) {
-          super();
-          this.cfg = inp.cfg;
-        }
-        public async setupVerify() {
-          // TODO
-        }
-        public async publish(args: { fact: Fact }) {
-          const npmrcFact = args.fact.kid([ '.npmrc' ]);
-          try {
-            await npmrcFact.setData(String[baseline](`
-              | registry=https://registry.npmjs.org/
-              | @${this.cfg.root.name}:registry=https://registry.npmjs.org/
-              | //registry.npmjs.org/:_authToken=${this.cfg.auth.token}
-              | always-auth=true
-            `));
-            await proc(`npm publish --registry=https://registry.npmjs.org/ --userconfig ${npmrcFact.fsp()} --access public`, { cwd: args.fact });
-          } finally { await npmrcFact.rem(); }
-        }
-        public async install(inp: { fact: Fact }) {
-          await proc('npm install', { cwd: inp.fact });
-        }
-        public async test(inp: { fact: Fact }) {
-          await proc('npm run test', { cwd: inp.fact });
-        }
-      };
-    
-      return {
-    
-        git: new GitTool({ cfg: config.git }),
-        npm: new NpmTool({ cfg: config.npm })
-    
-        // TODO: Add in all other "authTools" (maybe rename to "externalTools"?)
-        // - gh? (I think this can be combined into `GitTool`)
-        // - typescript? (Make sure it's the right version. But this file probably won't even transpile if it isn't?)
-        // - aws?
-        // - docker?
-        // - terraform?
-        // - localstack?
-    
-      };
+        if (this.cfg.root.type !== 'org') throw Error('logic missing'); // TODO!! I think a bearer token is needed, path changes, etc.
+        
+        type Repo = { id: string, name: string };
+        const res = await http<Repo[]>({
+          netProc: { proto: 'https' as const, addr: 'api.github.com', port: 443 },
+          headers: {
+            accept: 'application/vnd.github+json',
+            contentType: 'application/json'
+          },
+          path: [ 'orgs', this.getRootName(), 'repos' ],
+          method: 'get'
+        });
+
+        return res.body.map(v => ({ id: v.id, name: v.name })); 
+        
+      }
+      public async clone(inp: { name: string }) {
+        return this.proc(`git clone https://github.com/${this.getRootName()}/${inp.name}.git`, {
+          cwd: gershyFact
+        });
+      }
+      public async getChanges(inp: { fact: Fact }) {
+        
+        const { fact } = inp;
+        
+        const parseGitPorcelainStatus = (args: { fact: Fact, output: string }) => {
+          
+          const flagMap = {
+            
+            m:   'modified',
+            t:   'retyped', // e.g. file <-> symlink
+            a:   'added',
+            d:   'deleted',
+            r:   'renamed',
+            c:   'copied',
+            u:   'conflict',
+            
+            ' ': 'clean',
+            '?': 'untracked',
+            '!': 'ignored'
+            
+          };
+          
+          return args.output.split('\n')
+            [map](line => {
+              
+              if (!line.trim()) return skip;
+              
+              const stagedFlag   = line[0][lower]();
+              const unstagedFlag = line[1][lower]();
+              const [ relPathCmps, ...moreRelPathsCmps ] = line.slice(2)
+                .trim()
+                .split('->')
+                .map(rp => rp.trim())
+                .map(rp => rp[hasHead]('"') && rp[hasTail]('"') ? rp.slice(1, -1) : rp)
+                .map(rp => rp.split(/[/\\]/));
+              
+              return {
+                staged:    flagMap[at](  stagedFlag, `<unknown: '${  stagedFlag}'>`),
+                unstaged:  flagMap[at](unstagedFlag, `<unknown: '${unstagedFlag}'>`),
+                fact:      args.fact.kid(relPathCmps),
+                moreFacts: moreRelPathsCmps.map(rpc => args.fact.kid(rpc))
+              };
+              
+            });
+          
+        };
+        
+        const { output } = await this.proc('git status --porcelain', { cwd: fact });
+        return parseGitPorcelainStatus({ fact, output });
+        
+      }
+      public async send(inp: { fact: Fact, commitMsg: string }) {
+        await this.proc('git add --all',                    { cwd: inp.fact });
+        await this.proc(`git commit -m "${inp.commitMsg}"`, { cwd: inp.fact });
+        await this.proc('git push',                         { cwd: inp.fact });
+      }
       
+    };
+    class NpmTool extends SetupTool {
+      protected cfg: Config['npm'];
+      constructor(inp: { cfg: Config['npm'] }) {
+        super();
+        this.cfg = inp.cfg;
+      }
+      public async setupVerify() {
+        // TODO
+      }
+      public async publish(args: { fact: Fact }) {
+        const npmrcFact = args.fact.kid([ '.npmrc' ]);
+        try {
+          await npmrcFact.setData(String[baseline](`
+            | registry=https://registry.npmjs.org/
+            | @${this.cfg.root.name}:registry=https://registry.npmjs.org/
+            | //registry.npmjs.org/:_authToken=${this.cfg.auth.token}
+            | always-auth=true
+          `));
+          await proc(`npm publish --registry=https://registry.npmjs.org/ --userconfig ${npmrcFact.fsp()} --access public`, { cwd: args.fact });
+        } finally { await npmrcFact.rem(); }
+      }
+      public async install(inp: { fact: Fact }) {
+        await proc('npm install', { cwd: inp.fact });
+      }
+      public async test(inp: { fact: Fact }) {
+        await proc('npm run test', { cwd: inp.fact });
+      }
+    };
+  
+    return {
+  
+      git: new GitTool({ cfg: config.git }),
+      npm: new NpmTool({ cfg: config.npm })
+  
+      // TODO: Add in all other "authTools" (maybe rename to "externalTools"?)
+      // - gh? (I think this can be combined into `GitTool`)
+      // - typescript? (Make sure it's the right version. But this file probably won't even transpile if it isn't?)
+      // - aws?
+      // - docker?
+      // - terraform?
+      // - localstack?
+  
+    };
+    
   })();
   
   type DirName = string;
@@ -775,15 +817,57 @@ entry({ name: 'manager', codec, inp: { act: 'help' }, fn: async (logger, inp) =>
         logger.log({ $$: 'packageJsonVersionsUpdate' });
         
         // Check git status; possibly short-circuit
-        const { clean } = await (async () => {
+        const { term: dirtyTerm } = await (async () => {
           
-          const gitStatus = await authTools.git.status({ fact: repoFact });
-          const clean = gitStatus.output[has]('working tree clean');
-          logger.log({ $$: 'gitStatus', clean });
-          return { clean };
+          // TODO: in terms of npm-linkage, a repo can be clean despite changes to non-npm-bundled
+          // including:
+          // - readme.md
+          // - *.test.ts files
+          // - more??
+          // Implement this tighter sense of "clean"!
+          
+          const status = await authTools.git.getChanges({ fact: repoFact });
+          const srcFact = repoFact.kid([ 'src' ]);
+          const facts = status.map(s => [ s.fact, ...s.moreFacts ]).flat(1);
+          
+          const gitClean = facts.length === 0;
+          const npmClean = facts.every(fact => { // Npm is clean if every changed file is unrelated to the npm build
+            
+            // Can `fact` be ignored by the npm build?
+            
+            const fp = fact.getCmps().at(-1)!;
+            
+            // Changes to package.json can never be ignored by npm
+            if (fp === 'package.json') return false;
+            
+            // Changes outside the "src" directory are irrelevant to npm
+            if (!srcFact.fp.contains(fact.fp)) return true;
+            
+            // Typescript test files are irrelevant to npm
+            if (fp[hasTail]('.test.ts')) return true;
+            
+            // Consider: ignore non-typescript files? But maybe npm bundles should sometimes
+            // contain non-ts? Maybe... assets?? Probably not tbh.
+            
+            // This is a non-typescript-test file in the "src" directory!
+            return false;
+            
+          });
+          
+          // const gitStatus = await authTools.git.status({ fact: repoFact });
+          
+          logger.log({ $$: 'cleanCheck', gitClean, npmClean });
+          const term = !npmClean ? 'git+npm' as const : (gitClean ? 'git' as const : null);
+          return { term };
           
         })();
-        if (clean) return { modified: false };
+        
+        if (dirtyTerm === null) { logger.log({ $$: 'clean' }); return { modified: false }; }
+        
+        const gitCommit = async () => {
+          await authTools.git.send({ fact: repoFact, commitMsg });
+          logger.log({ $$: 'gitPush', commitMsg });
+        };
         
         // Run tests before committing anything...
         await (async () => {
@@ -798,7 +882,15 @@ entry({ name: 'manager', codec, inp: { act: 'help' }, fn: async (logger, inp) =>
           
         })();
         
-        // Update package.json version
+        if (dirtyTerm === 'git') {
+          
+          // No npm changes needed; just commit to git
+          
+          await gitCommit();
+          return { modified: false };
+          
+        }
+        
         const version = await (async () => {
           
           const [ major, minor, patch ] = this.pkg.version.split('.').map(v => parseInt(v, 10));
@@ -820,12 +912,7 @@ entry({ name: 'manager', codec, inp: { act: 'help' }, fn: async (logger, inp) =>
         })();
         
         // Commit to git
-        await (async () => {
-          
-          await authTools.git.send({ fact: repoFact, commitMsg });
-          logger.log({ $$: 'gitPush', commitMsg });
-          
-        })();
+        await gitCommit();
         
         // Commit to npm
         await (async () => {
@@ -1017,7 +1104,9 @@ entry({ name: 'manager', codec, inp: { act: 'help' }, fn: async (logger, inp) =>
     
     script: async (logger, units, inp) => logger.scope('script', {}, async logger => {
       
-      const result = await inp.script(units, { proc });
+      await ecosystem.load();
+      
+      const result = await inp.script(ecosystem, { proc });
       logger.log({ $$: 'result', result });
       
     }),
@@ -1140,13 +1229,25 @@ entry({ name: 'manager', codec, inp: { act: 'help' }, fn: async (logger, inp) =>
       
       const gitPending = await Promise[allArr](units[map](async unit => {
         
-        const gitStatus = await authTools.git.status({ fact: unit.getRepoFact() });
-        return gitStatus.output[has]('working tree clean') ? skip : unit;
+        const changes = await authTools.git.getChanges({ fact: unit.getRepoFact() });
+        return changes.length ? { unit, changes } : skip;
         
       }));
       
-      if (gitPending[empty]()) logger.log('Completely clean!');
-      else                     logger.log(`Pending changes in:\n${gitPending[map](unit => unit.getRepoFact().fsp()).map(ln => `- ${ln}`).join('\n')}`);
+      if (gitPending[empty]()) { logger.log('Completely clean!'); return; }
+      
+      logger.log({
+        pendingChanges: gitPending.map(({ unit, changes }) => ({
+          
+          unit: unit.getGitName(),
+          fsp: unit.getRepoFact().fsp(),
+          files: changes
+            .map(change => [ change.fact, ...change.moreFacts ])
+            .flat(1)
+            .map(fact => fact.fsp())
+          
+        }))
+      });
       
     }
     
