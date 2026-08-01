@@ -1,6 +1,6 @@
 {
   "name": "@gershy/manager",
-  "version": "0.0.25",
+  "version": "0.0.26",
   "author": "Gershom Maes",
   "description": "TODO",
   "keywords": [
@@ -8,34 +8,34 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/gershy/manager.git"
+    "url": "git+https://github.com/gershyNpm/manager.git"
   },
   "bugs": {
-    "url": "https://github.com/gershy/manager/issues"
+    "url": "https://github.com/gershyNpm/manager/issues"
   },
-  "homepage": "https://github.com/gershy/manager#readme",
+  "homepage": "https://github.com/gershyNpm/manager#readme",
   "type": "module",
   "files": [
     "cmp"
   ],
   "license": "ISC",
   "peerDependencies": {
-    "@gershy/clearing": "^0.0.51"
+    "@gershy/clearing": "^0.0.52"
   },
   "devDependencies": {
-    "@gershy/util-codec-parse": "^0.0.19",
+    "@gershy/util-codec-parse": "^0.0.20",
     "@types/node": "^24.10.1",
     "esbuild": "^0.28.0",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3"
   },
   "dependencies": {
-    "@gershy/disk": "^0.0.34",
-    "@gershy/entry": "^0.0.21",
-    "@gershy/nodejs-proc": "^0.0.21",
-    "@gershy/util-http": "^0.0.19",
-    "@gershy/util-retry": "^0.0.22",
-    "@gershy/util-try-with-healing": "^0.0.15"
+    "@gershy/disk": "^0.0.35",
+    "@gershy/entry": "^0.0.22",
+    "@gershy/nodejs-proc": "^0.0.22",
+    "@gershy/util-http": "^0.0.20",
+    "@gershy/util-retry": "^0.0.23",
+    "@gershy/util-try-with-healing": "^0.0.16"
   },
   "exports": {
     ".": {

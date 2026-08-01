@@ -6,12 +6,12 @@
   "author": "Gershom Maes",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/gershy/TODO.git"
+    "url": "git+https://github.com/gershyNpm/TODO.git"
   },
   "bugs": {
-    "url": "https://github.com/gershy/TODO/issues"
+    "url": "https://github.com/gershyNpm/TODO/issues"
   },
-  "homepage": "https://github.com/gershy/TODO#readme",
+  "homepage": "https://github.com/gershyNpm/TODO#readme",
   "license": "ISC",
   "peerDependencies": {},
   "devDependencies": {},

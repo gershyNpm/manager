@@ -10,6 +10,7 @@ import { entry } from '@gershy/entry';
 import { convertImportsTsToJs, recurseTree } from './util.ts';
 import type { Fact } from '@gershy/disk';
 import codecParse from '@gershy/util-codec-parse';
+import type Logger from '@gershy/logger';
 
 // TODO: TRANSFER REPOS TO "gershyNpm"...
 // [X] Transfer manually in UI
@@ -23,7 +24,8 @@ import codecParse from '@gershy/util-codec-parse';
 // - Some other tool (something custom) can search all imports for all @gershy dependencies and
 //   determine for each if it's a dev or runtime dependency
 
-const { skip } = clearing;
+const { skip, safe } = clearing;
+const at:       typeof clearing.at       = clearing.at;
 const map:      typeof clearing.map      = clearing.map;
 const mapk:     typeof clearing.mapk     = clearing.mapk;
 const has:      typeof clearing.has      = clearing.has;
@@ -32,6 +34,7 @@ const merge:    typeof clearing.merge    = clearing.merge;
 const toArr:    typeof clearing.toArr    = clearing.toArr;
 const hasHead:  typeof clearing.hasHead  = clearing.hasHead;
 const allObj:   typeof clearing.allObj   = clearing.allObj;
+const lower:    typeof clearing.lower    = clearing.lower;
 const upper:    typeof clearing.upper    = clearing.upper;
 const mod:      typeof clearing.mod      = clearing.mod;
 const slice:    typeof clearing.slice    = clearing.slice;
@@ -103,9 +106,9 @@ entry({ name: 'manager', codec, inp: { act: 'help' }, fn: async (logger, inp) =>
     } as const;
 
     const configJson = await manageFact.kid([ 'config.json' ]).getData('json');
-    const config = cl.safe(
+    const config = safe(
       () => codecParse(configCodec, configJson),
-      err => (err as Error)[cl.fire](msg => `config failed: ${msg}`)
+      err => (err as Error)[fire](msg => `config failed: ${msg}`)
     );
 
     const githubTokenExpiry = config.git.auth.expiry;
@@ -883,7 +886,7 @@ entry({ name: 'manager', codec, inp: { act: 'help' }, fn: async (logger, inp) =>
     }
 
     protected npmToGit(npm: NpmName): GitName { return npm.slice((this.npmGroupName + '/').length).replace(/-([a-z])/g, (_, c) => c[upper]()); }
-    protected gitToNpm(git: GitName): NpmName { return `${this.npmGroupName}/${git.replace(/([^A-Z])([A-Z])/g, '$1-$2')[cl.lower]()}`; }
+    protected gitToNpm(git: GitName): NpmName { return `${this.npmGroupName}/${git.replace(/([^A-Z])([A-Z])/g, '$1-$2')[lower]()}`; }
 
     public async load() {
 
@@ -892,7 +895,7 @@ entry({ name: 'manager', codec, inp: { act: 'help' }, fn: async (logger, inp) =>
 
         const pkg: null | PackageJson = await kid.kid([ 'package.json' ]).getData('json').catch(err => null) as any;
         const npmFullName = pkg?.name ?? null;
-        if (!npmFullName?.[cl.hasHead](this.npmGroupName + '/')) return skip;
+        if (!npmFullName?.[hasHead](this.npmGroupName + '/')) return skip;
 
         return this.getUnit(this.npmToGit(npmFullName), false);
 
@@ -919,7 +922,7 @@ entry({ name: 'manager', codec, inp: { act: 'help' }, fn: async (logger, inp) =>
     public async updateUnitDeps(gitName: string, deps: { [K in NpmDepKey]: { [K in NpmName]: NpmPinnedVersion } }, rebuild = true) {
 
       const mappedUnit = this.units.map.get(gitName);
-      if (!mappedUnit) throw Error('unit missing')[cl.mod]({ gitName });
+      if (!mappedUnit) throw Error('unit missing')[mod]({ gitName });
 
       const { unit } = mappedUnit;
 
@@ -940,7 +943,7 @@ entry({ name: 'manager', codec, inp: { act: 'help' }, fn: async (logger, inp) =>
       // note this does not rediscover units - it will comprehensively process all units already
       // present in `this.units`, and no others.
 
-      const map = new Map(this.units.map[cl.toArr]((v, k) => [ k, {
+      const map = new Map(this.units.map[toArr]((v, k) => [ k, {
         ...v,
         requires: npmDepKeys[toObj](v => [ v, new Set<any>() ]),
         supports: npmDepKeys[toObj](v => [ v, new Set<any>() ])
@@ -960,7 +963,7 @@ entry({ name: 'manager', codec, inp: { act: 'help' }, fn: async (logger, inp) =>
           const json: PackageJson = await unit.getPackageJsonFact().getData('json') as any;
 
           for (const depKey of npmDepKeys) {
-            for (const [ npmName, npmPinnedVersion ] of (json[depKey] ?? {})[cl.walk]()) {
+            for (const [ npmName, npmPinnedVersion ] of (json[depKey] ?? {})[walk]()) {
 
               if (!isActive()) break;
 
@@ -968,7 +971,7 @@ entry({ name: 'manager', codec, inp: { act: 'help' }, fn: async (logger, inp) =>
               // `npmName` - so `unit` "requires" unit-npm-named-`npmName`, and
               // unit-npm-named-`npmName` "supports" `unit`
 
-              if (!npmName[cl.hasHead](this.npmGroupName + '/')) continue; // package.json dependencies include non-ecosystem modules - ignore them!
+              if (!npmName[hasHead](this.npmGroupName + '/')) continue; // package.json dependencies include non-ecosystem modules - ignore them!
 
               // Apply the two-way linking
               const srcMappedUnit = map.get(unit.getGitName())!;
@@ -985,7 +988,7 @@ entry({ name: 'manager', codec, inp: { act: 'help' }, fn: async (logger, inp) =>
 
     }
 
-    [cl.limn]() {
+    [limn]() {
 
       return {
         $form: this.constructor.name,
@@ -1010,22 +1013,25 @@ entry({ name: 'manager', codec, inp: { act: 'help' }, fn: async (logger, inp) =>
   void ecosystem; // ZZZ - use it!!
   // ecosystem.load().then(() => logger.log({ ecosystem }));
   
-  const cmd = eval(`(${process.argv.at(-1)})`);
-  const units = await Unit.getUnits();
-  
-  const act = async (units: Unit[]) => {
+  const acts: { [K: string]: (logger: Logger, units: Unit[], inp: Obj<any>) => Promise<void> } = {
     
-    if (cmd.act === 'init') {
-
-      for (const [ , v ] of authTools[cl.walk]()) await v.setupVerify();
-
+    script: async (logger, units, inp) => logger.scope('script', {}, async logger => {
+      
+      const result = await inp.script(units, { proc });
+      logger.log({ $$: 'result', result });
+      
+    }),
+    
+    init: async (logger, units, inp) => {
+      
+      for (const [ , v ] of authTools[walk]()) await v.setupVerify();
+      
       const repos = await authTools.git.listRepos();
-
-      // const errors: any[] = [];
+      
       for (const [ n, repo ] of repos.entries()) await logger.scope(`repo.${n}`, { repo: repo.name }, async logger => {
-
+        
         const unit = Unit.getUnit(repo.name);
-
+        
         const repoExists = await unit.getRepoFact().getType() === 'node';
         if (repoExists) return void logger.log({ $$: 'preexisting' });
         
@@ -1036,27 +1042,13 @@ entry({ name: 'manager', codec, inp: { act: 'help' }, fn: async (logger, inp) =>
         logger.log({ $$: 'npmInstall' });
 
       });
-
-    } else if (cmd.act === 'script') {
       
-      await logger.scope('script', {}, async logger => {
-        
-        const result = await cmd.script(units, { proc });
-        logger.log({ $$: 'result', result });
-        
-      });
+    },
+    
+    updateFromTemplate: async (logger, units, inp) => {
       
-    } else if (cmd.act === 'getTypeCheck') {
-      
-      // TODOOO
-      
-      
-      // npx tsc --noEmit
-      
-    } else if (cmd.act === 'updateFromTemplate') {
-      
-      const { unit: gitName, commit = false } = cmd;
-      const updUnits = gitName === '*' ? units : [ units.find(unit => unit.getGitName() === cmd.unit)! ];
+      const { unit: gitName, commit = false } = inp;
+      const updUnits = gitName === '*' ? units : [ units.find(unit => unit.getGitName() === gitName)! ];
       
       for (const unit of updUnits) {
         
@@ -1069,16 +1061,20 @@ entry({ name: 'manager', codec, inp: { act: 'help' }, fn: async (logger, inp) =>
         
       logger.log('Done!');
       
-    } else if (cmd.act === 'getOverview') {
+    },
+    
+    getOverview: async (logger, units, inp) => {
       
       logger.log(units[map](u => `${u.getGitName()} (${u.getNpmName()}@${u.getNpmVersion()})`));
       
-    } else if (cmd.act === 'setCommit') {
+    },
+    
+    setCommit: async (logger, units, inp) => {
       
-      const { desc = '<automated>', commitMsg = desc, recurse = true } = cmd;
+      const { desc = '<automated>', commitMsg = desc, recurse = true } = inp;
       
-      const unit = units.find(unit => unit.getGitName() === cmd.unit);
-      if (!unit) throw Error('unit missing')[mod]({ unit: cmd.unit });
+      const unit = units.find(unit => unit.getGitName() === inp.unit);
+      if (!unit) throw Error('unit missing')[mod]({ unit: inp.unit });
       await unit.commitFully({ commitMsg });
       
       // Note that even if `commitFully` resulted in a no-op (e.g. no git changes) we still update
@@ -1129,14 +1125,18 @@ entry({ name: 'manager', codec, inp: { act: 'help' }, fn: async (logger, inp) =>
       
       logger.log('Done!');
       
-    } else if (cmd.act === 'setUnit') {
+    },
+    
+    setUnit: async (logger, units, inp) => {
       
-      const unit = Unit.getUnit(cmd.unit); // new Unit(cmd.unit);
+      const unit = Unit.getUnit(inp.unit); // new Unit(cmd.unit);
       await unit.firstTimeInitialization();
       
       logger.log(`Created "${unit.getGitName()}" unit!`);
       
-    } else if (cmd.act === 'getGitPending') {
+    },
+    
+    getGitPending: async (logger, units, inp) => {
       
       const gitPending = await Promise[allArr](units[map](async unit => {
         
@@ -1148,21 +1148,11 @@ entry({ name: 'manager', codec, inp: { act: 'help' }, fn: async (logger, inp) =>
       if (gitPending[empty]()) logger.log('Completely clean!');
       else                     logger.log(`Pending changes in:\n${gitPending[map](unit => unit.getRepoFact().fsp()).map(ln => `- ${ln}`).join('\n')}`);
       
-    } else if (cmd.act === 'getLlmResponse') {
-      
-      const res = await proc('copilot -p {{prompt}} --model "gpt-4.1"', { cwd: rootFact, args: { prompt: cmd.prompt }});
-      
-      logger.log('The llm responded:');
-      logger.log(res.output);
-      
-    } else {
-      
-      throw Error('unknown act')[mod]({ act: cmd.act });
-      
     }
     
   };
   
+  const units = await Unit.getUnits();
   const setRootTsconfig = async (mode: 'dev' | 'prod') => {
     
     // In "dev" mode @gershy dependencies are auto-linked; no need for npm dependency management
@@ -1197,7 +1187,11 @@ entry({ name: 'manager', codec, inp: { act: 'help' }, fn: async (logger, inp) =>
   };
   
   await setRootTsconfig('prod');
-  try     { await act(units); }
-  finally { await setRootTsconfig('dev').catch(err => logger.log({ $$: 'rootTsconfigDevResetFailed', err })); }
-
+  try     {
+    const act = acts[at](inp.act, () => Error('unknown act')[fire]({ act: inp.act }));
+    await act(logger, units, inp);
+  } finally {
+    await setRootTsconfig('dev').catch(err => logger.log({ $$: 'rootTsconfigDevResetFailed', err }));
+  }
+  
 }});

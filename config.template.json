@@ -1,0 +1,31 @@
+{
+
+  "npm": {
+    "user": "<TODO>",
+    "root": { "name": "<TODO - scope name; either username or org name; do NOT include an '@' character>" },
+    "auth": {
+      "token": "<TODO - begins with 'npm_'>",
+      "expiry": "Jan 01, 9999"
+    }
+  },
+
+  "git": {
+    "user": "<TODO>",
+    "name": "<TODO - first and last name, space separated, human-readable>",
+    "email": "<TODO - email associated with your git user>",
+    "root": "<TODO - either { type: 'org', name: '<org name>' }, or { type: 'user' }>",
+    "auth": {
+      "token": "<TODO - begins with 'ghp_'>",
+      "expiry": "Jul 01, 9999"
+    }
+  },
+
+  "aws": {
+    "region": "<TODO - standard aws region term like ca-central-1>",
+    "auth": {
+      "id": "<TODO - 20 chars uppercase alpha and numbers>",
+      "!secret": "<TODO - 40 chars mixed-case alpha and numbers>"
+    }
+  }
+
+}
