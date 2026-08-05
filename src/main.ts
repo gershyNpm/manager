@@ -50,7 +50,7 @@ const codec = {
     prod: { req: false, type: 'bln' }
   }
 } as const;
-entry({ name: 'manager', log: { format: { maxLineLen: 100 } }, codec, inp: { act: 'help' }, fn: async (logger, inp) => {
+entry({ name: 'manager', log: { format: { maxLineLen: 130 } }, codec, inp: { act: 'help' }, fn: async (logger, inp) => {
   
   const manageFact = rootFact.kid([ import.meta.dirname ]).par();
   const gershyFact = manageFact.par(); // References the "@gershy" directory
@@ -433,6 +433,9 @@ entry({ name: 'manager', log: { format: { maxLineLen: 100 } }, codec, inp: { act
       await this.updateFromTemplate();
       logger.log('Set up template files');
       
+      await authTools.npm.install({ fact: this.getRepoFact() });
+      logger.log('Initial npm install');
+      
       await this.commitFully({ commitMsg: 'initial @gershy setup' });
       
     }
@@ -498,27 +501,14 @@ entry({ name: 'manager', log: { format: { maxLineLen: 100 } }, codec, inp: { act
         })
         [merge]({ // manager-controlled fields...
           
-          // Note `skip` values address outdated stuff previously populated on all repos!
-          // TODO: Get rid of that...
-          
           scripts: {
-            
-            'build.cjs': skip,
-            'build.mjs': skip,
-            'build': skip,
             
             // TODO: Consider running tests with `node --import tsx/esm ./src/main.test.ts` - it's faster, but stuff may break??
             'test': "npm run ts.check && npx tsx ./src/main.test.ts",
             'ts.check': "npx tsc --noEmit",
-            'git.pub':   skip,
-            'npm.login': skip,
-            'npm.cmp':   skip,
-            'npm.pub':   skip
             
           },
           
-          types: skip,
-          sideEffects: skip,
           exports: {
           
             // Note this is merged in, so repos may have their own inner exports!
@@ -530,17 +520,13 @@ entry({ name: 'manager', log: { format: { maxLineLen: 100 } }, codec, inp: { act
           },
           
           peerDependencies: {
-            '@gershy/clearing': `^${await gershyFact.kid([ 'clearing', 'package.json' ]).getData('json').then((v: any) => v.version)}` // Note the version will be resolved and baked into package.json by `this.commitFully(...)`
+            '@gershy/clearing': `^${await Unit.getUnit('clearing').getNpmVersion()}` // Note the version is anyways updated by `this.commitFully(...)`
           }[slash](pkgMainDepNames as any[]), // Eliminate peer dependencies which already appear in main dependencies! (E.g. scriptBundle has esbuild as a *main* dep, not a *dev* dep)
           devDependencies: {
-            '@types/node': '^24.10.1',
-            'esbuild':     skip,
-            'tsx':         skip,
-            'typescript':  skip
+            '@types/node':   '^24.10.1',
+            '@gershy/entry': `^${await Unit.getUnit('entry').getNpmVersion()}`
           }[slash](pkgMainDepNames as any[]),
-          dependencies: {
-            'tsx': skip
-          }
+          dependencies: {}
           
         }),
         
@@ -756,6 +742,9 @@ entry({ name: 'manager', log: { format: { maxLineLen: 100 } }, codec, inp: { act
       
       await this.getRepoFact().kid([ 'package.json' ]).setData(JSON.stringify(this.pkg, null, 2));
       
+      // References may have changed - rebuild them!
+      this.initPrm = null; await this.initReferences();
+      
     }
     public async updatePkgRequiredDeps() {
       
@@ -803,7 +792,7 @@ entry({ name: 'manager', log: { format: { maxLineLen: 100 } }, codec, inp: { act
       });
       
     }
-    public async commitFully(args: { commitMsg: string }): Promise<{ modified: boolean }> {
+    public async commitFully(args: { commitMsg: string }): Promise<{ npmDirty: boolean }> {
       
       return logger.scope(`commit.${this.getGitName()}`, {}, async logger => {
         
@@ -857,12 +846,18 @@ entry({ name: 'manager', log: { format: { maxLineLen: 100 } }, codec, inp: { act
           // const gitStatus = await authTools.git.status({ fact: repoFact });
           
           logger.log({ $$: 'cleanCheck', gitClean, npmClean });
-          const term = !npmClean ? 'git+npm' as const : (gitClean ? 'git' as const : null);
+          
+          const term = (() => {
+            if (!npmClean) return 'git+npm';
+            if (!gitClean) return 'git';
+            return null;
+          })();
+          
           return { term };
           
         })();
         
-        if (dirtyTerm === null) { logger.log({ $$: 'clean' }); return { modified: false }; }
+        if (dirtyTerm === null) { logger.log({ $$: 'clean' }); return { npmDirty: false }; }
         
         const gitCommit = async () => {
           await authTools.git.send({ fact: repoFact, commitMsg });
@@ -887,7 +882,7 @@ entry({ name: 'manager', log: { format: { maxLineLen: 100 } }, codec, inp: { act
           // No npm changes needed; just commit to git
           
           await gitCommit();
-          return { modified: false };
+          return { npmDirty: false };
           
         }
         
@@ -935,14 +930,14 @@ entry({ name: 'manager', log: { format: { maxLineLen: 100 } }, codec, inp: { act
             } else {
               cnt++;
               logger.log({ $$: 'npmRegister', ready: false, attempts: cnt, existingVersion: viewVersion, expectedVersion: version });
-              await new Promise(r => setTimeout(r, 500));
+              await new Promise(r => setTimeout(r, 750));
             }
             
           }
           
         })();
         
-        return { modified: true };
+        return { npmDirty: true };
         
       });
       
