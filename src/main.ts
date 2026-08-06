@@ -171,7 +171,7 @@ entry({ name: 'manager', log: { format: { maxLineLen: 130 } }, codec, inp: { act
       }
       public async listRepos() {
         
-        if (this.cfg.root.type !== 'org') throw Error('logic missing'); // TODO!! I think a bearer token is needed, path changes, etc.
+        if (this.cfg.root.type !== 'org') throw Error('script missing'); // TODO!! I think a bearer token is needed, path changes, etc.
         
         type Repo = { id: string, name: string };
         const res = await http<Repo[]>({
@@ -847,12 +847,7 @@ entry({ name: 'manager', log: { format: { maxLineLen: 130 } }, codec, inp: { act
           
           logger.log({ $$: 'cleanCheck', gitClean, npmClean });
           
-          const term = (() => {
-            if (!npmClean) return 'git+npm';
-            if (!gitClean) return 'git';
-            return null;
-          })();
-          
+          const term = !npmClean ? 'git+npm' as const : (!gitClean ? 'git' as const : null);
           return { term };
           
         })();

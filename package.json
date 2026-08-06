@@ -1,6 +1,6 @@
 {
   "name": "@gershy/manager",
-  "version": "0.0.32",
+  "version": "0.0.33",
   "author": "Gershom Maes",
   "description": "TODO",
   "keywords": [
@@ -30,11 +30,11 @@
     "typescript": "^5.9.3"
   },
   "dependencies": {
-    "@gershy/disk": "^0.0.37",
-    "@gershy/entry": "^0.0.24",
-    "@gershy/nodejs-proc": "^0.0.24",
-    "@gershy/util-http": "^0.0.22",
-    "@gershy/util-retry": "^0.0.25",
+    "@gershy/disk": "^0.0.38",
+    "@gershy/entry": "^0.0.25",
+    "@gershy/nodejs-proc": "^0.0.25",
+    "@gershy/util-http": "^0.0.23",
+    "@gershy/util-retry": "^0.0.26",
     "@gershy/util-try-with-healing": "^0.0.18"
   },
   "exports": {
